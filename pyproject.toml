@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sentinel-vl"
+version = "0.1.0"
+description = "Uncertainty-Aware and Explainable Video-Language Understanding for Security Monitoring"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "Sentinel-VL Team" }
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Intended Audience :: Science/Research",
+]
+dependencies = []
+
+[project.optional-dependencies]
+app = [
+    "streamlit>=1.30.0",
+    "pandas>=2.0.0",
+    "altair>=5.0.0",
+]
+dev = [
+    "pytest>=7.0.0",
+]
+ml = [
+    # Heavy ML dependencies: deferred to subsequent milestones when approved
+    "torch>=2.0.0",
+    "torchvision>=0.15.0",
+]
+
+[project.scripts]
+sentinel-vl = "sentinel_vl.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+

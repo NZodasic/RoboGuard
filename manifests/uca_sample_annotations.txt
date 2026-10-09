@@ -1,0 +1,10 @@
+Arrest001_x264 0.0 8.5 ##A police vehicle arrives in an open parking lot and parks near a stationary white sedan.
+Arrest001_x264 8.5 20.0 ##Two officers step out and approach the suspect vehicle, commanding the occupants to remain inside.
+Arrest001_x264 20.0 35.0 ##The officers escort the suspect to the patrol car and secure the scene.
+Burglary002_x264 2.0 14.0 ##A dark alleyway at night with closed commercial rear exit doors.
+Burglary002_x264 14.0 32.0 ##A person wearing a dark hooded jacket attempts to pry open a metal security latch with a prybar.
+Burglary002_x264 32.0 48.0 ##The person slips through the forced doorway and enters the closed building.
+Fighting003_x264 0.0 10.0 ##Two individuals argue heatedly on a street sidewalk near parked cars.
+Fighting003_x264 10.0 24.5 ##A physical altercation breaks out with shoving and striking as onlookers intervene.
+Normal_Videos_001_x264 0.0 30.0 ##Pedestrians walk casually along an outdoor pedestrian plaza in broad daylight.
+Normal_Videos_001_x264 30.0 60.0 ##Bicycles and normal foot traffic proceed without interruption along the public square.

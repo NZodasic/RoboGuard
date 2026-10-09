@@ -1,0 +1,126 @@
+{
+  "manifest_version": "1.0.0",
+  "created_at": "2026-10-09T12:23:45.067769+00:00",
+  "videos": {
+    "Arrest001_x264": {
+      "video_id": "Arrest001_x264",
+      "source_path": "data/videos/Arrest001_x264.mp4",
+      "duration_seconds": 35.0,
+      "decoding_status": "unverified",
+      "fps": null,
+      "resolution": null,
+      "checksum": null
+    },
+    "Burglary002_x264": {
+      "video_id": "Burglary002_x264",
+      "source_path": "data/videos/Burglary002_x264.mp4",
+      "duration_seconds": 48.0,
+      "decoding_status": "unverified",
+      "fps": null,
+      "resolution": null,
+      "checksum": null
+    },
+    "Fighting003_x264": {
+      "video_id": "Fighting003_x264",
+      "source_path": "data/videos/Fighting003_x264.mp4",
+      "duration_seconds": 28.0,
+      "decoding_status": "unverified",
+      "fps": null,
+      "resolution": null,
+      "checksum": null
+    },
+    "Normal_Videos_001_x264": {
+      "video_id": "Normal_Videos_001_x264",
+      "source_path": "data/videos/Normal_Videos_001_x264.mp4",
+      "duration_seconds": 60.0,
+      "decoding_status": "unverified",
+      "fps": null,
+      "resolution": null,
+      "checksum": null
+    }
+  },
+  "captions": [
+    {
+      "segment_id": "Arrest001_x264_seg_0000",
+      "video_id": "Arrest001_x264",
+      "start_seconds": 0.0,
+      "end_seconds": 8.5,
+      "caption": "A police vehicle arrives in an open parking lot and parks near a stationary white sedan.",
+      "provenance": "uca_human_reference"
+    },
+    {
+      "segment_id": "Arrest001_x264_seg_0001",
+      "video_id": "Arrest001_x264",
+      "start_seconds": 8.5,
+      "end_seconds": 20.0,
+      "caption": "Two officers step out and approach the suspect vehicle, commanding the occupants to remain inside.",
+      "provenance": "uca_human_reference"
+    },
+    {
+      "segment_id": "Arrest001_x264_seg_0002",
+      "video_id": "Arrest001_x264",
+      "start_seconds": 20.0,
+      "end_seconds": 35.0,
+      "caption": "The officers escort the suspect to the patrol car and secure the scene.",
+      "provenance": "uca_human_reference"
+    },
+    {
+      "segment_id": "Burglary002_x264_seg_0000",
+      "video_id": "Burglary002_x264",
+      "start_seconds": 2.0,
+      "end_seconds": 14.0,
+      "caption": "A dark alleyway at night with closed commercial rear exit doors.",
+      "provenance": "uca_human_reference"
+    },
+    {
+      "segment_id": "Burglary002_x264_seg_0001",
+      "video_id": "Burglary002_x264",
+      "start_seconds": 14.0,
+      "end_seconds": 32.0,
+      "caption": "A person wearing a dark hooded jacket attempts to pry open a metal security latch with a prybar.",
+      "provenance": "uca_human_reference"
+    },
+    {
+      "segment_id": "Burglary002_x264_seg_0002",
+      "video_id": "Burglary002_x264",
+      "start_seconds": 32.0,
+      "end_seconds": 48.0,
+      "caption": "The person slips through the forced doorway and enters the closed building.",
+      "provenance": "uca_human_reference"
+    },
+    {
+      "segment_id": "Fighting003_x264_seg_0000",
+      "video_id": "Fighting003_x264",
+      "start_seconds": 0.0,
+      "end_seconds": 10.0,
+      "caption": "Two individuals argue heatedly on a street sidewalk near parked cars.",
+      "provenance": "uca_human_reference"
+    },
+    {
+      "segment_id": "Fighting003_x264_seg_0001",
+      "video_id": "Fighting003_x264",
+      "start_seconds": 10.0,
+      "end_seconds": 24.5,
+      "caption": "A physical altercation breaks out with shoving and striking as onlookers intervene.",
+      "provenance": "uca_human_reference"
+    },
+    {
+      "segment_id": "Normal_Videos_001_x264_seg_0000",
+      "video_id": "Normal_Videos_001_x264",
+      "start_seconds": 0.0,
+      "end_seconds": 30.0,
+      "caption": "Pedestrians walk casually along an outdoor pedestrian plaza in broad daylight.",
+      "provenance": "uca_human_reference"
+    },
+    {
+      "segment_id": "Normal_Videos_001_x264_seg_0001",
+      "video_id": "Normal_Videos_001_x264",
+      "start_seconds": 30.0,
+      "end_seconds": 60.0,
+      "caption": "Bicycles and normal foot traffic proceed without interruption along the public square.",
+      "provenance": "uca_human_reference"
+    }
+  ],
+  "anomaly_windows": [],
+  "excluded_videos": {}
+}

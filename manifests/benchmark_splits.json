@@ -1,0 +1,14 @@
+{
+  "protocol": "uca_ucf_harmonized_split_v1",
+  "source_video_isolated": true,
+  "train": [
+    "Arrest001_x264",
+    "Normal_Videos_001_x264"
+  ],
+  "val": [
+    "Burglary002_x264"
+  ],
+  "test": [
+    "Fighting003_x264"
+  ]
+}

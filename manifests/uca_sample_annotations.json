@@ -1,0 +1,50 @@
+{
+  "Arrest001_x264": {
+    "duration": 35.0,
+    "timestamps": [
+      [0.0, 8.5],
+      [8.5, 20.0],
+      [20.0, 35.0]
+    ],
+    "sentences": [
+      "A police vehicle arrives in an open parking lot and parks near a stationary white sedan.",
+      "Two officers step out and approach the suspect vehicle, commanding the occupants to remain inside.",
+      "The officers escort the suspect to the patrol car and secure the scene."
+    ]
+  },
+  "Burglary002_x264": {
+    "duration": 48.0,
+    "timestamps": [
+      [2.0, 14.0],
+      [14.0, 32.0],
+      [32.0, 48.0]
+    ],
+    "sentences": [
+      "A dark alleyway at night with closed commercial rear exit doors.",
+      "A person wearing a dark hooded jacket attempts to pry open a metal security latch with a prybar.",
+      "The person slips through the forced doorway and enters the closed building."
+    ]
+  },
+  "Fighting003_x264": {
+    "duration": 28.0,
+    "timestamps": [
+      [0.0, 10.0],
+      [10.0, 24.5]
+    ],
+    "sentences": [
+      "Two individuals argue heatedly on a street sidewalk near parked cars.",
+      "A physical altercation breaks out with shoving and striking as onlookers intervene."
+    ]
+  },
+  "Normal_Videos_001_x264": {
+    "duration": 60.0,
+    "timestamps": [
+      [0.0, 30.0],
+      [30.0, 60.0]
+    ],
+    "sentences": [
+      "Pedestrians walk casually along an outdoor pedestrian plaza in broad daylight.",
+      "Bicycles and normal foot traffic proceed without interruption along the public square."
+    ]
+  }
+}
