@@ -18,42 +18,25 @@ def train_mil_model(
     seed: int = 42,
 ) -> int:
     """Trains MIL anomaly model and saves versioned checkpoint."""
+    from sentinel_vl.training.anomaly_mil import train_mil_checkpoint
+
     print("=" * 65)
     print(" Sentinel-VL Weakly Supervised MIL Training (Milestone M3)")
+    print(" Notice: Training on synthetic bags for optimization check.")
     print("=" * 65)
 
-    np.random.seed(seed)
-    head = MILAnomalyHead(feature_dim=feature_dim, top_k_ratio=0.2, seed=seed)
-    trainer = MILTrainer(head, learning_rate=0.02, weight_decay=1e-4)
-
-    # Generate development bags (15 normal bags, 15 anomaly bags)
-    bags = []
-    for i in range(15):
-        # Normal video bag
-        n_windows = np.random.randint(6, 12)
-        norm_feat = np.random.randn(n_windows, feature_dim).astype(np.float32) - 0.4
-        bags.append((norm_feat, 0))
-
-        # Abnormal video bag (contains a cluster of anomalous windows)
-        anom_feat = np.random.randn(n_windows, feature_dim).astype(np.float32) - 0.4
-        peak_idx = np.random.randint(0, n_windows - 2)
-        anom_feat[peak_idx : peak_idx + 2] += 1.8  # localized anomaly
-        bags.append((anom_feat, 1))
-
-    train_bags = bags[:20]
-    val_bags = bags[20:]
-
-    print(f"Training on {len(train_bags)} video bags, validating on {len(val_bags)} bags...")
-    history = trainer.fit(train_bags, val_bags=val_bags, epochs=epochs)
+    saved_path, history = train_mil_checkpoint(
+        output_checkpoint=output_checkpoint,
+        feature_dim=feature_dim,
+        epochs=epochs,
+        seed=seed,
+    )
 
     print("\nTraining Summary:")
     print(f"  Initial Train Loss: {history.train_losses[0]:.4f}")
     print(f"  Final Train Loss:   {history.train_losses[-1]:.4f}")
     print(f"  Best Val ROC-AUC:   {history.best_roc_auc:.4f}")
-
-    checksum = head.save_checkpoint(output_checkpoint)
-    print(f"\nSaved checkpoint to: {output_checkpoint}")
-    print(f"Checksum (SHA-256):  {checksum}")
+    print(f"\nSaved checkpoint to: {saved_path}")
     print("=" * 65)
     return 0
 

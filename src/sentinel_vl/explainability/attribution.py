@@ -66,10 +66,20 @@ class FrameAttributionService:
 
         A faithful attribution method should exhibit significantly greater drop when
         removing top-k important windows than when removing random windows of equal size.
+
+        Note on bag-length confound:
+        Removing windows reduces the bag length from T to T - remove_k, which can shift
+        the discrete top-k ceiling count. Controlled zero-replacement or fixed-k evaluation
+        should be noted as a confound alongside leave-one-out removal.
         """
         t_windows = len(temporal_features)
         if t_windows <= remove_k:
-            return {"top_k_drop": 0.0, "random_drop": 0.0, "faithfulness_ratio": 1.0}
+            return {
+                "top_k_drop": 0.0,
+                "mean_random_drop": 0.0,
+                "faithfulness_ratio": 1.0,
+                "faithful": True,
+            }
 
         base_scores = model.predict_window_scores(temporal_features)
         base_bag = model.aggregate_video_score(base_scores)

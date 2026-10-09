@@ -1,15 +1,17 @@
 """Uncertainty Quantification, Calibration, and Selective Decision Service (Milestone M4).
 
 Scientific requirements:
-- Head ensemble over fixed features (not full encoder ensemble).
+- Head ensemble over fixed features with multiple independently trained/initialized heads.
 - Temperature scaling T > 0 fitted strictly on validation/calibration split.
-- Predictive disagreement proxy via entropy mutual information.
-- Selective prediction returning accepted decisions vs review-required.
-- Zero coverage yields risk = None (undefined).
+- Uses consistent video-level aggregation (top-k mean bag score) across training, calibration, and inference.
+- Saves and loads versioned calibration artifacts.
+- If no valid calibration artifact is loaded, predictions are explicitly labeled 'uncalibrated' (calibrated_prob = None).
 """
 
 from __future__ import annotations
 
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -23,8 +25,38 @@ from sentinel_vl.uncertainty.contracts import (
 )
 
 
+@dataclass
+class CalibrationArtifact:
+    """Versioned artifact capturing temperature scaling fit provenance."""
+    temperature: float
+    aggregation_definition: str = "top_k_mean"
+    calibrator_version: str = "1.0.0"
+    head_checkpoint_hashes: List[str] = field(default_factory=list)
+    calibration_partition_hash: Optional[str] = None
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    def __post_init__(self) -> None:
+        if self.temperature <= 0:
+            raise ValueError(f"Temperature must be strictly positive, got {self.temperature}")
+
+    def save(self, path: str | Path) -> None:
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(asdict(self), f, indent=2)
+
+    @classmethod
+    def load(cls, path: str | Path) -> CalibrationArtifact:
+        p = Path(path)
+        if not p.is_file():
+            raise FileNotFoundError(f"Calibration artifact not found: {p}")
+        with open(p, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return cls(**data)
+
+
 class HeadEnsemble:
-    """Ensemble of independently initialized anomaly prediction heads over fixed representations."""
+    """Ensemble of independently trained/initialized anomaly prediction heads over fixed representations."""
 
     def __init__(
         self,
@@ -34,15 +66,25 @@ class HeadEnsemble:
         seed: int = 42,
     ) -> None:
         if heads is not None:
+            if len(heads) < 2:
+                raise ValueError("HeadEnsemble requires at least 2 heads to quantify predictive disagreement.")
             self.heads = heads
         else:
             self.heads = [
                 MILAnomalyHead(feature_dim=feature_dim, seed=seed + i * 17)
-                for i in range(num_heads)
+                for i in range(max(2, num_heads))
             ]
 
+    @classmethod
+    def load_from_checkpoints(cls, checkpoint_paths: List[str | Path]) -> HeadEnsemble:
+        """Loads ensemble from a list of checkpoint JSON files."""
+        if len(checkpoint_paths) < 2:
+            raise ValueError("Ensemble loading requires at least 2 checkpoint paths.")
+        heads = [MILAnomalyHead.load_checkpoint(p) for p in checkpoint_paths]
+        return cls(heads=heads)
+
     def predict_bag(self, temporal_features: np.ndarray) -> Tuple[float, float, List[float]]:
-        """Predicts bag anomaly score, disagreement, and mean window scores across ensemble.
+        """Predicts aggregated video score, predictive disagreement, and mean window scores across ensemble.
 
         Returns:
             (mean_bag_score, disagreement, window_mean_scores)
@@ -58,16 +100,16 @@ class HeadEnsemble:
             all_bag_scores.append(bag_s)
             head_entropies.append(compute_binary_entropy(bag_s))
 
-        # Mean bag score
+        # Mean top-k bag score across ensemble
         mean_bag = float(np.mean(all_bag_scores))
 
-        # Entropy of ensemble mean
+        # Shannon entropy of ensemble mean
         mean_entropy = compute_binary_entropy(mean_bag)
 
         # Disagreement proxy = H(p_bar) - mean(H(p_m))
         disagreement = max(0.0, float(mean_entropy - np.mean(head_entropies)))
 
-        # Mean window scores
+        # Mean window scores across ensemble
         mean_win_scores = np.mean(all_window_scores, axis=0).tolist()
         mean_win_scores = [round(float(s), 4) for s in mean_win_scores]
 
@@ -77,49 +119,52 @@ class HeadEnsemble:
 class TemperatureCalibrator:
     """Post-hoc temperature scaling for video-level binary anomaly predictions."""
 
-    def __init__(self, temperature: float = 1.0) -> None:
-        if temperature <= 0.0:
+    def __init__(self, temperature: Optional[float] = None) -> None:
+        if temperature is not None and temperature <= 0.0:
             raise ValueError(f"Temperature must be strictly positive, got {temperature}")
-        self.temperature = float(temperature)
+        self.temperature = float(temperature) if temperature is not None else None
+
+    @property
+    def is_calibrated(self) -> bool:
+        return self.temperature is not None and self.temperature > 0.0
 
     @staticmethod
     def _logit(p: float) -> float:
         p_clipped = max(min(p, 1.0 - 1e-7), 1e-7)
         return float(np.log(p_clipped / (1.0 - p_clipped)))
 
-    def calibrate(self, raw_score: float) -> float:
-        """Applies temperature scaling: p_T = sigmoid(logit(p) / T)."""
-        z = self._logit(raw_score)
+    def calibrate(self, raw_bag_score: float) -> Optional[float]:
+        """Applies temperature scaling: p_T = sigmoid(logit(p) / T). Returns None if uncalibrated."""
+        if not self.is_calibrated or self.temperature is None:
+            return None
+        z = self._logit(raw_bag_score)
         scaled_z = np.clip(z / self.temperature, -30.0, 30.0)
         prob = 1.0 / (1.0 + np.exp(-scaled_z))
         return round(float(prob), 4)
 
     def fit(
         self,
-        val_raw_scores: List[float],
+        val_bag_scores: List[float],
         val_labels: List[int],
         lr: float = 0.05,
         epochs: int = 50,
     ) -> float:
         """Optimizes temperature T on validation calibration partition using NLL."""
-        if len(val_raw_scores) != len(val_labels) or len(val_raw_scores) == 0:
+        if len(val_bag_scores) != len(val_labels) or len(val_bag_scores) == 0:
             raise ValueError("Validation scores and labels must be non-empty and of equal length.")
 
-        logits = np.array([self._logit(s) for s in val_raw_scores], dtype=np.float32)
+        logits = np.array([self._logit(s) for s in val_bag_scores], dtype=np.float32)
         y = np.array(val_labels, dtype=np.float32)
 
-        # Optimize log_T for unconstrained parameterization (T = exp(log_T) > 0)
-        log_t = float(np.log(max(self.temperature, 0.1)))
+        init_t = self.temperature if self.temperature else 1.0
+        log_t = float(np.log(max(init_t, 0.1)))
 
         for _ in range(epochs):
             t = np.exp(log_t)
             scaled = np.clip(logits / t, -30.0, 30.0)
             sig = 1.0 / (1.0 + np.exp(-scaled))
 
-            # dNLL/dT = sum((sig - y) * (-logits / T^2))
-            # dNLL/d(log_T) = dNLL/dT * T = sum((sig - y) * (-logits / T))
             grad_log_t = np.sum((sig - y) * (-logits / t))
-
             log_t -= lr * float(np.clip(grad_log_t, -5.0, 5.0))
 
         self.temperature = round(float(np.exp(log_t)), 4)
@@ -151,6 +196,24 @@ class TemperatureCalibrator:
 
         return round(float(ece), 4)
 
+    def to_artifact(
+        self,
+        checkpoint_hashes: Optional[List[str]] = None,
+        partition_hash: Optional[str] = None,
+    ) -> CalibrationArtifact:
+        if not self.is_calibrated or self.temperature is None:
+            raise ValueError("Cannot create artifact from an uncalibrated calibrator.")
+        return CalibrationArtifact(
+            temperature=self.temperature,
+            aggregation_definition="top_k_mean",
+            head_checkpoint_hashes=checkpoint_hashes or [],
+            calibration_partition_hash=partition_hash,
+        )
+
+    @classmethod
+    def from_artifact(cls, artifact: CalibrationArtifact) -> TemperatureCalibrator:
+        return cls(temperature=artifact.temperature)
+
 
 class SelectiveDecisionService:
     """Decides between automated positive/negative decisions and human review abstention."""
@@ -167,29 +230,29 @@ class SelectiveDecisionService:
 
     def decide(
         self,
-        calibrated_prob: float,
+        score_or_calibrated_prob: float,
         disagreement: float,
     ) -> str:
         """Returns 'accepted_normal', 'accepted_anomalous', or 'review_required'."""
         if disagreement > self.max_disagreement:
             return "review_required"
 
-        if calibrated_prob >= self.high_threshold:
+        if score_or_calibrated_prob >= self.high_threshold:
             return "accepted_anomalous"
-        elif calibrated_prob <= self.low_threshold:
+        elif score_or_calibrated_prob <= self.low_threshold:
             return "accepted_normal"
         else:
             return "review_required"
 
     def evaluate_risk_coverage(
         self,
-        calibrated_probs: List[float],
+        scores_or_probs: List[float],
         disagreements: List[float],
         labels: List[int],
     ) -> Dict[str, Any]:
         """Evaluates policy coverage, error risk, and review rate."""
         decisions = [
-            self.decide(p, d) for p, d in zip(calibrated_probs, disagreements)
+            self.decide(p, d) for p, d in zip(scores_or_probs, disagreements)
         ]
         accepted_mask = [d != "review_required" for d in decisions]
         predicted_binary = [

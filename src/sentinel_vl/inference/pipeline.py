@@ -1,12 +1,12 @@
-"""Integrated Inference Pipeline for Sentinel-VL (Milestone M6).
+"""Integrated Inference Pipeline for Sentinel-VL.
 
 Connects:
 - Visual/temporal feature inputs
 - Anomaly scoring via MIL head / HeadEnsemble
-- Video-level probability calibration
+- Video-level probability calibration (consistent aggregation)
 - Predictive disagreement & selective decision service
 - Prediction-specific frame attribution
-- Grounded incident report generation
+- Grounded incident report generation (honest score-based reporting)
 - Natural-language cross-modal retrieval
 """
 
@@ -26,6 +26,7 @@ from sentinel_vl.models.retrieval import (
 from sentinel_vl.reporting.grounding import GroundedReportGenerator
 from sentinel_vl.reporting.schemas import IncidentReport
 from sentinel_vl.uncertainty.calibration import (
+    CalibrationArtifact,
     HeadEnsemble,
     SelectiveDecisionService,
     TemperatureCalibrator,
@@ -34,7 +35,7 @@ from sentinel_vl.uncertainty.contracts import UQPrediction
 
 
 class InferenceDisabledError(RuntimeError):
-    """Raised when real inference is attempted without configured checkpoints and verified data."""
+    """Raised when inference is attempted without configured checkpoints or unsupported inputs."""
     pass
 
 
@@ -43,7 +44,9 @@ class PipelineConfig:
     """Configuration parameters for Sentinel-VL pipeline execution."""
     real_inference_enabled: bool = False
     anomaly_head_checkpoint: Optional[str] = None
-    calibrator_temperature: float = 1.0
+    ensemble_checkpoints: Optional[List[str]] = None
+    calibration_artifact_path: Optional[str] = None
+    calibrator_temperature: Optional[float] = None
     selective_high_threshold: float = 0.70
     selective_low_threshold: float = 0.30
     selective_max_disagreement: float = 0.12
@@ -51,12 +54,13 @@ class PipelineConfig:
 
 
 class SentinelInferencePipeline:
-    """Integrated inference pipeline executing perception, UQ, XAI, and reporting."""
+    """Inference pipeline executing MIL scoring, UQ, attribution, and reporting."""
 
     def __init__(self, config: Optional[PipelineConfig] = None) -> None:
         self.config = config or PipelineConfig()
         self.anomaly_head: Optional[MILAnomalyHead] = None
-        self.calibrator = TemperatureCalibrator(temperature=self.config.calibrator_temperature)
+        self.ensemble: Optional[HeadEnsemble] = None
+        self.calibrator = TemperatureCalibrator(temperature=None)
         self.decision_service = SelectiveDecisionService(
             high_threshold=self.config.selective_high_threshold,
             low_threshold=self.config.selective_low_threshold,
@@ -64,12 +68,29 @@ class SentinelInferencePipeline:
         )
         self.retrieval_head = VideoTextRetrievalHead()
 
-        # Load checkpoint if configured and enabled
-        if self.config.real_inference_enabled and self.config.anomaly_head_checkpoint:
-            ckpt_path = Path(self.config.anomaly_head_checkpoint)
-            if not ckpt_path.is_file():
-                raise InferenceDisabledError(f"Configured checkpoint does not exist: {ckpt_path}")
-            self.anomaly_head = MILAnomalyHead.load_checkpoint(ckpt_path)
+        # Load calibration artifact or temperature if configured
+        if self.config.calibration_artifact_path:
+            calib_path = Path(self.config.calibration_artifact_path)
+            if calib_path.is_file():
+                artifact = CalibrationArtifact.load(calib_path)
+                self.calibrator = TemperatureCalibrator.from_artifact(artifact)
+        elif self.config.calibrator_temperature is not None:
+            self.calibrator = TemperatureCalibrator(temperature=self.config.calibrator_temperature)
+
+        # Load anomaly head checkpoint if configured and enabled
+        if self.config.real_inference_enabled:
+            if self.config.anomaly_head_checkpoint:
+                ckpt_path = Path(self.config.anomaly_head_checkpoint)
+                if not ckpt_path.is_file():
+                    raise InferenceDisabledError(f"Configured checkpoint does not exist: {ckpt_path}")
+                self.anomaly_head = MILAnomalyHead.load_checkpoint(ckpt_path)
+
+            # Load multi-head ensemble if multiple checkpoints configured
+            if self.config.ensemble_checkpoints and len(self.config.ensemble_checkpoints) >= 2:
+                for p in self.config.ensemble_checkpoints:
+                    if not Path(p).is_file():
+                        raise InferenceDisabledError(f"Configured ensemble checkpoint does not exist: {p}")
+                self.ensemble = HeadEnsemble.load_from_checkpoints(self.config.ensemble_checkpoints)
 
     def run_feature_inference(
         self,
@@ -78,12 +99,17 @@ class SentinelInferencePipeline:
         duration_seconds: float,
         query: Optional[str] = None,
         candidate_reference_texts: Optional[List[str]] = None,
+        provenance: str = "feature_test",
     ) -> Dict[str, Any]:
-        """Runs full integrated inference over extracted temporal features."""
+        """Runs inference over extracted temporal feature vectors.
+
+        Note: When temporal_features are synthetic or unverified, provenance must not be
+        labeled 'real_model'. Default provenance is 'feature_test'.
+        """
         if not self.config.real_inference_enabled:
             raise InferenceDisabledError(
                 "Real model inference is disabled in pipeline config. "
-                "Set config.real_inference_enabled=True and configure checkpoint to run."
+                "Set config.real_inference_enabled=True and configure a valid checkpoint."
             )
 
         if self.anomaly_head is None:
@@ -97,6 +123,7 @@ class SentinelInferencePipeline:
 
         # 1. Anomaly scoring & window predictions
         win_scores = self.anomaly_head.predict_window_scores(temporal_features)
+        bag_score = self.anomaly_head.aggregate_video_score(win_scores)
         peak_score = float(np.max(win_scores))
         peak_idx = int(np.argmax(win_scores))
         peak_interval = (
@@ -104,23 +131,35 @@ class SentinelInferencePipeline:
             round(min(duration_seconds, (peak_idx + 1) * window_duration), 1),
         )
 
-        # 2. Uncertainty Quantification via Ensemble & Calibration
-        ensemble = HeadEnsemble(
-            heads=[self.anomaly_head],  # Can be expanded with additional ensemble heads
-            feature_dim=self.anomaly_head.feature_dim,
-        )
-        mean_bag, disagreement, _ = ensemble.predict_bag(temporal_features)
-        calibrated_prob = self.calibrator.calibrate(peak_score)
-        decision = self.decision_service.decide(calibrated_prob, disagreement)
+        # 2. Uncertainty Quantification: Ensemble and Calibration
+        # Disagreement is computed only if an actual multi-head ensemble (>= 2 heads) is loaded
+        if self.ensemble is not None:
+            mean_bag, disagreement, _ = self.ensemble.predict_bag(temporal_features)
+            score_to_calibrate = mean_bag
+        else:
+            mean_bag = bag_score
+            disagreement = None
+            score_to_calibrate = bag_score
+
+        # Calibrate the aggregated video bag score consistently (not maximum peak score)
+        if self.calibrator.is_calibrated:
+            calibrated_prob = self.calibrator.calibrate(score_to_calibrate)
+            calib_version = f"video_temp_{self.calibrator.temperature}"
+        else:
+            calibrated_prob = None
+            calib_version = "uncalibrated"
+
+        score_for_decision = calibrated_prob if calibrated_prob is not None else mean_bag
+        decision = self.decision_service.decide(score_for_decision, disagreement if disagreement is not None else 0.0)
 
         uq_summary = UQPrediction(
-            raw_score=peak_score,
+            raw_score=round(mean_bag, 4),
             calibrated_probability=calibrated_prob,
             disagreement=disagreement,
             decision=decision,
-            granularity="video_level_calibrated",
-            calibration_version=f"video_temp_{self.calibrator.temperature}",
-            provenance="real_model",
+            granularity="video_level_calibrated" if self.calibrator.is_calibrated else "segment_level_uncalibrated",
+            calibration_version=calib_version,
+            provenance=provenance,
         )
 
         # 3. Explainability: Frame attribution
@@ -130,7 +169,7 @@ class SentinelInferencePipeline:
         evidence_frame_ids = [f"frame_{idx:03d}" for idx in np.argsort(-np.array(importances))[:2]]
         candidate_frame_pool = [f"frame_{idx:03d}" for idx in range(t_windows)]
 
-        # 4. Grounded Reporting
+        # 4. Grounded Reporting (honest score-based reporting; no fabricated visual actions)
         report = GroundedReportGenerator.generate_report(
             video_id=video_id,
             peak_interval=peak_interval,
@@ -138,11 +177,12 @@ class SentinelInferencePipeline:
             video_decision=decision,
             evidence_frame_ids=evidence_frame_ids,
             candidate_frame_pool=candidate_frame_pool,
-            observed_action_template="Rapid motion detected across security perimeter.",
+            observed_action_description=None,  # Honest: no VLM configured
             calibrated_probability=calibrated_prob,
             disagreement=disagreement,
-            model_version="sentinel-vl-m6-integrated",
-            provenance="real_model",
+            calibration_version=calib_version,
+            model_version="sentinel-vl-m6-feature-engine",
+            provenance=provenance,
         )
 
         # 5. Retrieval ranking
@@ -155,17 +195,20 @@ class SentinelInferencePipeline:
             for rank_pos, (c_idx, sim_score) in enumerate(clip_sims, 1):
                 c_start = round(c_idx * window_duration, 1)
                 c_end = round(min(duration_seconds, (c_idx + 1) * window_duration), 1)
-                ref_txt = candidate_reference_texts[c_idx] if candidate_reference_texts and c_idx < len(candidate_reference_texts) else "Observed activity segment."
+                ref_txt = (
+                    candidate_reference_texts[c_idx]
+                    if candidate_reference_texts and c_idx < len(candidate_reference_texts)
+                    else "Segment evaluation window."
+                )
                 retrieval_results.append({
                     "rank": rank_pos,
                     "interval_seconds": [c_start, c_end],
                     "similarity_score": round(sim_score, 4),
                     "query": query,
                     "reference_text": ref_txt,
-                    "provenance": "real_model",
+                    "provenance": provenance,
                 })
 
-        # Structured window list for UI timeline
         windows = [
             {
                 "window_index": i,
@@ -179,7 +222,7 @@ class SentinelInferencePipeline:
         ]
 
         return {
-            "provenance": "real_model",
+            "provenance": provenance,
             "video_id": video_id,
             "duration_seconds": duration_seconds,
             "windows": windows,
@@ -193,30 +236,18 @@ class SentinelInferencePipeline:
         video_path: str | Path,
         query: Optional[str] = None,
     ) -> IncidentReport:
-        """Runs full video understanding, retrieval, and anomaly scoring."""
-        if not self.config.real_inference_enabled:
-            raise InferenceDisabledError(
-                "Real model inference is disabled in Sentinel-VL Milestone M0/M6. "
-                "Supported checkpoints, verified data manifests, and evaluation protocols "
-                "must be configured before running production inference. "
-                "For application testing and schema verification, use run_synthetic_demo() instead."
-            )
+        """Evaluates raw video file.
 
-        if not self.config.anomaly_head_checkpoint or not Path(self.config.anomaly_head_checkpoint).exists():
-            raise InferenceDisabledError(
-                f"Configured anomaly checkpoint '{self.config.anomaly_head_checkpoint}' does not exist on disk."
-            )
-
-        # For feature-based video inference when checkpoint is loaded:
-        v_path = Path(video_path)
-        dummy_feat = np.random.randn(8, self.anomaly_head.feature_dim).astype(np.float32)
-        res = self.run_feature_inference(
-            video_id=v_path.stem,
-            temporal_features=dummy_feat,
-            duration_seconds=32.0,
-            query=query,
+        Raises InferenceDisabledError because timestamped video decoding and
+        visual encoder feature extraction are not yet implemented.
+        """
+        raise InferenceDisabledError(
+            "Real-video inference is disabled: timestamped video decoding and visual feature "
+            "extraction are not yet configured. Sentinel-VL cannot decode or encode raw video "
+            "files directly until a verified visual encoder pipeline is configured. "
+            "To evaluate the head on pre-extracted features, call run_feature_inference(); "
+            "for application and schema testing, call run_synthetic_demo()."
         )
-        return res["report"]
 
     @staticmethod
     def run_synthetic_demo(
@@ -274,8 +305,8 @@ class SentinelInferencePipeline:
             video_decision=decision,
             calibration_version="mock_video_calibration_v0",
             description=(
-                f"Synthetic Demo: Temporal peak detected between {max_window['start_seconds']}s and "
-                f"{max_window['end_seconds']}s. A subject accelerates toward the perimeter."
+                f"Synthetic Demo: Peak score ({peak_score:.3f}) observed between {max_window['start_seconds']}s and "
+                f"{max_window['end_seconds']}s. (Synthetic mock fixture; no visual event description active)."
             ),
             evidence_frame_ids=["mock_frame_012", "mock_frame_016"],
             description_status="generated_unreviewed",
@@ -291,7 +322,7 @@ class SentinelInferencePipeline:
                 "interval_seconds": [max_window["start_seconds"], max_window["end_seconds"]],
                 "similarity_score": 0.842,
                 "query": query or "person running",
-                "reference_text": "A person runs rapidly across the corridor.",
+                "reference_text": "Synthetic mock match: query simulation.",
                 "provenance": "synthetic_demo",
             },
             {
@@ -299,7 +330,7 @@ class SentinelInferencePipeline:
                 "interval_seconds": [0.0, 4.0],
                 "similarity_score": 0.315,
                 "query": query or "person running",
-                "reference_text": "An empty hallway with stationary lighting.",
+                "reference_text": "Synthetic mock match: query simulation.",
                 "provenance": "synthetic_demo",
             },
         ]

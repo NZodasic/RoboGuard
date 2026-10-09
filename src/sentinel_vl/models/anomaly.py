@@ -130,18 +130,19 @@ class MILAnomalyHead(BaseAnomalyHead):
             "weights": self.weights.tolist(),
         }
 
-        content_bytes = json.dumps(payload, indent=2).encode("utf-8")
+        content_bytes = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
         checksum = hashlib.sha256(content_bytes).hexdigest()
-        payload["sha256"] = checksum
+        payload_with_hash = dict(payload)
+        payload_with_hash["sha256"] = checksum
 
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
+            json.dump(payload_with_hash, f, indent=2)
 
         return checksum
 
     @classmethod
-    def load_checkpoint(cls, checkpoint_path: str | Path) -> MILAnomalyHead:
-        """Loads model weights and metadata from a JSON checkpoint."""
+    def load_checkpoint(cls, checkpoint_path: str | Path, verify_checksum: bool = True) -> MILAnomalyHead:
+        """Loads model weights and validates SHA-256 checksum integrity."""
         path = Path(checkpoint_path)
         if not path.is_file():
             raise FileNotFoundError(f"Checkpoint file not found: {path}")
@@ -151,6 +152,17 @@ class MILAnomalyHead(BaseAnomalyHead):
 
         if data.get("model_type") != "MILAnomalyHead":
             raise ValueError(f"Invalid model_type in checkpoint: {data.get('model_type')}")
+
+        if verify_checksum and "sha256" in data:
+            expected_checksum = data["sha256"]
+            payload = {k: v for k, v in data.items() if k != "sha256"}
+            content_bytes = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
+            actual_checksum = hashlib.sha256(content_bytes).hexdigest()
+            if actual_checksum != expected_checksum:
+                raise ValueError(
+                    f"Checkpoint integrity verification failed: expected {expected_checksum}, "
+                    f"calculated {actual_checksum}. Checkpoint may be corrupted."
+                )
 
         head = cls(
             feature_dim=int(data["feature_dim"]),
@@ -171,7 +183,7 @@ def compute_roc_and_pr_auc(
     y_true: List[int],
     y_scores: List[float],
 ) -> Dict[str, float]:
-    """Computes ROC-AUC and PR-AUC using trapezoidal integration."""
+    """Computes ROC-AUC and PR-AUC using trapezoidal integration with distinct threshold tie handling."""
     if len(y_true) != len(y_scores) or len(y_true) == 0:
         return {"roc_auc": 0.5, "pr_auc": 0.0}
 
@@ -184,27 +196,29 @@ def compute_roc_and_pr_auc(
     if pos_count == 0 or neg_count == 0:
         return {"roc_auc": 0.5, "pr_auc": 0.0}
 
-    # Sort by scores descending
-    desc_order = np.argsort(-y_s)
+    # Sort descending
+    desc_order = np.argsort(-y_s, kind="mergesort")
+    y_s_sorted = y_s[desc_order]
     y_t_sorted = y_t[desc_order]
 
-    # ROC calculation
-    tps = np.cumsum(y_t_sorted == 1)
-    fps = np.cumsum(y_t_sorted == 0)
+    # Robust tie handling: evaluate at distinct score thresholds only
+    distinct_mask = np.r_[y_s_sorted[1:] != y_s_sorted[:-1], True]
+    threshold_idxs = np.where(distinct_mask)[0]
 
-    tpr = tps / pos_count
-    fpr = fps / neg_count
+    tps = np.cumsum(y_t_sorted == 1)[threshold_idxs]
+    fps = np.cumsum(y_t_sorted == 0)[threshold_idxs]
 
-    # Add origin
-    tpr = np.r_[0, tpr]
-    fpr = np.r_[0, fpr]
+    tpr = np.r_[0.0, tps / float(pos_count)]
+    fpr = np.r_[0.0, fps / float(neg_count)]
 
     # Trapezoidal rule for ROC AUC
     roc_auc = float(np.trapezoid(tpr, fpr)) if hasattr(np, "trapezoid") else float(np.trapz(tpr, fpr))
 
-    # Precision-Recall
-    precisions = tps / (tps + fps)
-    recalls = tpr[1:]
+    # Precision-Recall at distinct thresholds
+    denom = tps + fps
+    precisions = np.where(denom > 0, tps / np.maximum(denom, 1e-12), 1.0)
+    recalls = tps / float(pos_count)
+
     precisions = np.r_[1.0, precisions]
     recalls = np.r_[0.0, recalls]
 
@@ -214,3 +228,4 @@ def compute_roc_and_pr_auc(
         "roc_auc": round(abs(roc_auc), 4),
         "pr_auc": round(abs(pr_auc), 4),
     }
+

@@ -13,7 +13,7 @@ def test_real_inference_is_disabled_by_default() -> None:
     pipeline = SentinelInferencePipeline()
     assert pipeline.config.real_inference_enabled is False
 
-    with pytest.raises(InferenceDisabledError, match="Real model inference is disabled in Sentinel-VL Milestone M0"):
+    with pytest.raises(InferenceDisabledError, match="Real-video inference is disabled"):
         pipeline.run_video_inference("some_video.mp4")
 
 

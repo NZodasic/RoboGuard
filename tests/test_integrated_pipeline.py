@@ -38,26 +38,26 @@ def test_integrated_pipeline_execution(tmp_path: Path) -> None:
         query="person running across hallway",
     )
 
-    assert output["provenance"] == "real_model"
+    assert output["provenance"] == "feature_test"
     assert output["video_id"] == "test_video_integrated"
     assert len(output["windows"]) == 8
     assert "importance" in output["windows"][0]
 
     report = output["report"]
-    assert report.provenance == "real_model"
+    assert report.provenance == "feature_test"
     assert report.video_id == "test_video_integrated"
     assert report.video_decision in ("accepted_normal", "accepted_anomalous", "review_required")
     assert len(report.evidence_frame_ids) <= 2
 
     # UQ summary
     uq = output["uq_summary"]
-    assert uq.provenance == "real_model"
+    assert uq.provenance == "feature_test"
     assert uq.calibrated_probability is not None
 
     # Retrieval
     retrieval = output["retrieval_results"]
     assert len(retrieval) > 0
-    assert retrieval[0]["provenance"] == "real_model"
+    assert retrieval[0]["provenance"] == "feature_test"
 
 
 def test_integrated_pipeline_disabled_fails() -> None:

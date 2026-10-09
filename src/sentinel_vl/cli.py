@@ -263,27 +263,42 @@ def handle_demo_summary(video_id: str, duration: float, output_json: bool) -> in
 
 
 def handle_train_mil(output_path: str, epochs: int) -> int:
-    from scripts.train_anomaly_mil import train_mil_model
-    return train_mil_model(output_checkpoint=output_path, epochs=epochs)
+    from sentinel_vl.training.anomaly_mil import train_mil_checkpoint
+    ckpt_path, hist = train_mil_checkpoint(output_checkpoint=output_path, epochs=epochs)
+    print(f"Checkpoint saved to {ckpt_path} (final train loss: {hist.train_losses[-1]:.4f}, best ROC-AUC: {hist.best_roc_auc:.4f})")
+    return 0
 
 
 def handle_eval_retrieval(manifest_path: str) -> int:
-    from scripts.evaluate_retrieval import run_retrieval_benchmark
-    return run_retrieval_benchmark(manifest_path=manifest_path)
+    from sentinel_vl.evaluation.retrieval_eval import run_retrieval_smoke_benchmark
+    res = run_retrieval_smoke_benchmark(manifest_path=manifest_path)
+    print("=" * 60)
+    print(" Video-Language Retrieval Smoke Benchmark Results")
+    print("=" * 60)
+    print(f"Recall@1:    {res['recall_at_1']:.4f}")
+    print(f"Recall@5:    {res['recall_at_5']:.4f}")
+    print(f"Recall@10:   {res['recall_at_10']:.4f}")
+    print(f"Mean Rank:   {res['mean_rank']:.2f}")
+    print(f"Median Rank: {res['median_rank']:.2f}")
+    print("=" * 60)
+    print("NOTE: Evaluated with pseudo-embeddings on sample manifest as engineering check.")
+    return 0
 
 
 def handle_run_experiments() -> int:
-    """Runs end-to-end evaluation suite across retrieval, MIL, calibration, and attribution."""
+    """Runs end-to-end synthetic pipeline smoke tests and engineering verification."""
     print("=" * 70)
-    print(" Sentinel-VL Full Experimental Pipeline & Ablations (M1-M6)")
+    print(" Sentinel-VL Synthetic Pipeline Smoke Tests & Engineering Verification")
+    print(" Notice: These are numerical sanity checks on synthetic/sample fixtures,")
+    print("         NOT empirical research benchmarks on full raw surveillance data.")
     print("=" * 70)
 
     # 1. Manifest and split audit
-    print("\n[Step 1/5] Ingesting Verified Manifest and Auditing Partitions...")
+    print("\n[Step 1/5] Ingesting Sample Manifest and Auditing Partitions...")
     m_path = "manifests/uca_verified_manifest.json"
     manifest = ManifestManager.load_manifest(m_path)
-    print(f"  Verified UCA Videos:   {len(manifest.videos)}")
-    print(f"  Verified Captions:     {len(manifest.captions)}")
+    print(f"  Sample UCA Videos:     {len(manifest.videos)}")
+    print(f"  Sample Captions:       {len(manifest.captions)}")
 
     splits_file = Path("manifests/benchmark_splits.json")
     if splits_file.exists():
@@ -298,20 +313,28 @@ def handle_run_experiments() -> int:
         audit_res = SplitAuditor.audit_partition(partition)
         print(f"  Split Audit Disjointness: {'PASSED (Zero Leakage)' if audit_res.is_valid else 'FAILED'}")
 
-    # 2. Retrieval benchmark
-    print("\n[Step 2/5] Evaluating Video-Language Retrieval Baseline (R0)...")
-    from scripts.evaluate_retrieval import run_retrieval_benchmark
-    run_retrieval_benchmark(manifest_path=m_path)
+    # 2. Retrieval smoke test
+    print("\n[Step 2/5] Running Retrieval Ranking Metric Smoke Test...")
+    from sentinel_vl.evaluation.retrieval_eval import run_retrieval_smoke_benchmark
+    r_res = run_retrieval_smoke_benchmark(manifest_path=m_path)
+    print(f"  Recall@1: {r_res['recall_at_1']:.4f} | Recall@5: {r_res['recall_at_5']:.4f} | MedRank: {r_res['median_rank']:.1f}")
 
-    # 3. MIL Anomaly Training
-    print("\n[Step 3/5] Training Weakly Supervised Anomaly Head (A0)...")
-    from scripts.train_anomaly_mil import train_mil_model
+    # 3. MIL Anomaly Training Check
+    print("\n[Step 3/5] Verifying MIL Optimization & Checkpoint Serialization...")
+    from sentinel_vl.training.anomaly_mil import train_mil_checkpoint
     ckpt_path = "checkpoints/mil_head_baseline.json"
-    train_mil_model(output_checkpoint=ckpt_path, epochs=15)
+    saved_path, hist = train_mil_checkpoint(output_checkpoint=ckpt_path, epochs=15)
+    print(f"  Initial Loss: {hist.train_losses[0]:.4f} -> Converged Loss: {hist.train_losses[-1]:.4f}")
+    print(f"  Checkpoint:   {saved_path}")
 
-    # 4. Temperature Calibration & Selective Prediction
-    print("\n[Step 4/5] Calibrating Video-Level Predictions & Evaluating Selective Policy (A2/A3)...")
-    from sentinel_vl.uncertainty.calibration import SelectiveDecisionService, TemperatureCalibrator
+    # 4. Temperature Calibration & Selective Prediction Check
+    print("\n[Step 4/5] Fitting Temperature Scaler & Serializing Calibration Artifact...")
+    from sentinel_vl.uncertainty.calibration import (
+        CalibrationArtifact,
+        SelectiveDecisionService,
+        TemperatureCalibrator,
+    )
+    from sentinel_vl.models.anomaly import MILAnomalyHead
     calib = TemperatureCalibrator(temperature=1.0)
     dev_scores = [0.88, 0.82, 0.79, 0.72, 0.25, 0.18, 0.14, 0.08]
     dev_labels = [1, 1, 1, 1, 0, 0, 0, 0]
@@ -323,29 +346,39 @@ def handle_run_experiments() -> int:
     disagreements = [0.03, 0.04, 0.05, 0.08, 0.02, 0.03, 0.04, 0.02]
     sel_res = service.evaluate_risk_coverage(cal_probs, disagreements, dev_labels)
 
+    # Save fitted calibration artifact
+    loaded_head = MILAnomalyHead.load_checkpoint(ckpt_path)
+    calib_art_path = Path("checkpoints/calibration_baseline.json")
+    artifact = CalibrationArtifact(
+        temperature=round(fitted_t, 4),
+        aggregation_definition="top_k_mean",
+        head_checkpoint_hashes=[],
+        calibration_partition_hash="smoke_test_dev_split",
+    )
+    artifact.save(calib_art_path)
+
     print(f"  Fitted Temperature (T):  {fitted_t:.4f}")
     print(f"  Calibration ECE:         {ece:.4f}")
     print(f"  Selective Coverage:      {sel_res['coverage'] * 100:.1f}%")
     print(f"  Accepted Risk (Error):   {sel_res['risk']:.4f}")
-    print(f"  Review Rate:             {sel_res['review_rate'] * 100:.1f}%")
+    print(f"  Calibration Artifact:    Saved ({calib_art_path})")
 
-    # 5. Explainability Attribution Faithfulness
-    print("\n[Step 5/5] Evaluating Frame Attribution Faithfulness vs Random Controls (XAI)...")
+    # 5. Explainability Attribution Sensitivity
+    print("\n[Step 5/5] Evaluating Frame Attribution Sensitivity vs Random Removal...")
     from sentinel_vl.explainability.attribution import FrameAttributionService
-    from sentinel_vl.models.anomaly import MILAnomalyHead
     import numpy as np
 
-    head = MILAnomalyHead.load_checkpoint(ckpt_path)
-    eval_feat = np.random.randn(8, head.feature_dim).astype(np.float32)
+    eval_feat = np.random.randn(8, loaded_head.feature_dim).astype(np.float32)
     eval_feat[3:5] += 2.0
-    attr_res = FrameAttributionService.evaluate_removal_versus_random(head, eval_feat, remove_k=2)
+    attr_res = FrameAttributionService.evaluate_removal_versus_random(loaded_head, eval_feat, remove_k=2)
 
     print(f"  Top-k Removal Score Drop:   {attr_res['top_k_drop']:.4f}")
     print(f"  Random Removal Score Drop:  {attr_res['mean_random_drop']:.4f}")
-    print(f"  Attribution Faithfulness:   {attr_res['faithfulness_ratio']}x (Faithful: {attr_res['faithful']})")
+    print(f"  Attribution Sensitivity:    {attr_res['faithfulness_ratio']}x")
 
     print("\n" + "=" * 70)
-    print(" ALL RESEARCH EXPERIMENTAL CHECKS COMPLETED SUCCESSFULLY")
+    print(" ALL SYNTHETIC PIPELINE SMOKE TESTS COMPLETED SUCCESSFULLY")
+    print(" See docs/SYNTHETIC_SMOKE_TESTS.md for details & docs/EXPERIMENTS.md for protocols")
     print("=" * 70)
     return 0
 

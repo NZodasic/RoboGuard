@@ -26,52 +26,24 @@ def run_retrieval_benchmark(
     temperature: float = 0.07,
 ) -> int:
     """Executes held-out retrieval evaluation smoke benchmark."""
+    from sentinel_vl.evaluation.retrieval_eval import run_retrieval_smoke_benchmark
+
     print("=" * 65)
     print(" Sentinel-VL Video-Language Retrieval Evaluation (Milestone M2)")
+    print(" Notice: Evaluating on synthetic pseudo-embeddings as pipeline check.")
     print("=" * 65)
 
-    manifest = ManifestManager.load_manifest(manifest_path)
-    print(f"Loaded manifest: {len(manifest.videos)} videos, {len(manifest.captions)} caption segments")
+    res = run_retrieval_smoke_benchmark(
+        manifest_path=manifest_path,
+        embedding_dim=embedding_dim,
+        temperature=temperature,
+    )
 
-    if not manifest.captions:
-        print("Error: No caption segments in manifest.", file=sys.stderr)
-        return 1
-
-    # Build unique video index and query index
-    video_list = list(manifest.videos.keys())
-    video_to_idx = {vid: i for i, vid in enumerate(video_list)}
-
-    # Generate or extract embeddings
-    video_embs: List[np.ndarray] = []
-    for vid in video_list:
-        # Generate feature representing video
-        emb = SyntheticFeatureGenerator.generate_embedding(f"video_feature_{vid}", dim=embedding_dim)
-        video_embs.append(emb)
-
-    text_embs: List[np.ndarray] = []
-    gt_pairs: Set[Tuple[int, int]] = set()
-
-    for qid, caption in enumerate(manifest.captions):
-        # Generate text embedding
-        t_emb = SyntheticFeatureGenerator.generate_embedding(f"caption_feature_{caption.caption}", dim=embedding_dim)
-        text_embs.append(t_emb)
-
-        vid_idx = video_to_idx.get(caption.video_id)
-        if vid_idx is not None:
-            gt_pairs.add((vid_idx, qid))
-
-    V = np.array(video_embs, dtype=np.float32)
-    T = np.array(text_embs, dtype=np.float32)
-
-    head = VideoTextRetrievalHead(temperature=temperature)
-    sim_matrix = head.compute_similarity_matrix(V, T)
-
-    metrics = evaluate_retrieval(sim_matrix, gt_pairs, recall_ks=(1, 5, 10))
-
+    metrics = res["metrics"]
     print("\nRetrieval Benchmark Results:")
-    print(f"  Candidate Video Pool Size: {len(video_list)}")
-    print(f"  Evaluated Query Count:     {len(manifest.captions)}")
-    print(f"  Multi-positive Pairs:      {len(gt_pairs)}")
+    print(f"  Candidate Video Pool Size: {res['candidate_pool_size']}")
+    print(f"  Evaluated Query Count:     {res['query_count']}")
+    print(f"  Multi-positive Pairs:      {res['multi_positive_pairs']}")
     print("-" * 65)
     for k, v in metrics.items():
         print(f"  {k:<15}: {v}")
